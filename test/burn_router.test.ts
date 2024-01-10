@@ -1,27 +1,29 @@
 const CC_BURN_REQUESTS = require('./test_fixtures/ccBurnRequests.json');
-require('dotenv').config({path:"../../.env"});
+require('dotenv').config({path: "../../.env"});
 
-import { expect } from "chai";
-import { deployments, ethers } from "hardhat";
-import { Signer, BigNumber } from "ethers";
-import { deployMockContract, MockContract } from "@ethereum-waffle/mock-contract";
-import { Address } from "hardhat-deploy/types";
-import { Contract } from "@ethersproject/contracts";
+import {expect} from "chai";
+import {deployments, ethers} from "hardhat";
+import {Signer, BigNumber} from "ethers";
+import {deployMockContract, MockContract} from "@ethereum-waffle/mock-contract";
+import {Address} from "hardhat-deploy/types";
+import {Contract} from "@ethersproject/contracts";
 
-import { TeleBTC } from "../src/types/TeleBTC";
-import { TeleBTC__factory } from "../src/types/factories/TeleBTC__factory";
-import { ERC20 } from "../src/types/ERC20";
-import { Erc20__factory } from "../src/types/factories/Erc20__factory";
+import {CoreBTCLogic} from "../src/types/CoreBTCLogic";
+import {CoreBTCLogic__factory} from "../src/types/factories/CoreBTCLogic__factory";
+import {CoreBTCProxy} from "../src/types/CoreBTCProxy";
+import {CoreBTCProxy__factory} from "../src/types/factories/CoreBTCProxy__factory";
+import {Erc20} from "../src/types/ERC20";
+import {Erc20__factory} from "../src/types/factories/Erc20__factory";
 
-import { BurnRouterLib } from "../src/types/BurnRouterLib";
-import { BurnRouterLib__factory } from "../src/types/factories/BurnRouterLib__factory";
+import {BurnRouterLib} from "../src/types/BurnRouterLib";
+import {BurnRouterLib__factory} from "../src/types/factories/BurnRouterLib__factory";
 
-import { BurnRouterProxy__factory } from "../src/types/factories/BurnRouterProxy__factory";
-import { BurnRouterLogic__factory } from "../src/types/factories/BurnRouterLogic__factory";
-import { BurnRouterLogicLibraryAddresses } from "../src/types/factories/BurnRouterLogic__factory";
+import {BurnRouterProxy__factory} from "../src/types/factories/BurnRouterProxy__factory";
+import {BurnRouterLogic__factory} from "../src/types/factories/BurnRouterLogic__factory";
+import {BurnRouterLogicLibraryAddresses} from "../src/types/factories/BurnRouterLogic__factory";
 
-import { takeSnapshot, revertProvider } from "./block_utils";
-import { network } from "hardhat"
+import {takeSnapshot, revertProvider} from "./block_utils";
+import {network} from "hardhat"
 
 describe("BurnRouter", async () => {
     let snapshotId: any;
@@ -32,14 +34,15 @@ describe("BurnRouter", async () => {
     let signer1: Signer;
     let signer2: Signer;
     let signer1Address: Address;
+    let signer2Address: Address;
     let deployerAddress: Address;
     let proxyAdminAddress: Address;
 
     // Contracts
-    let teleBTC: TeleBTC;
-    let inputToken: ERC20;
-    let inputTokenSigner1: ERC20;
-    let TeleBTCSigner1: TeleBTC;
+    let coreBTC: CoreBTCLogic;
+    let inputToken: Erc20;
+    let inputTokenSigner1: Erc20;
+    let CoreBTCSigner1: CoreBTCLogic;
     let burnRouterLib: BurnRouterLib;
     let burnRouter: Contract;
     let burnRouterSigner1: Contract;
@@ -48,7 +51,6 @@ describe("BurnRouter", async () => {
     // Mock contracts
     let mockBitcoinRelay: MockContract;
     let mockLockers: MockContract;
-    let mockExchangeConnector: MockContract;
 
     // Constants
     let ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -58,20 +60,21 @@ describe("BurnRouter", async () => {
         This one is set so that:
         userRequestedAmount * (1 - lockerFee / 10000 - PROTOCOL_PERCENTAGE_FEE / 10000) - BITCOIN_FEE = 100000000
     */
-    let userRequestedAmount = BigNumber.from(100060030);
+    let userRequestedAmount = 14000;
+    let burnAmount = 10000;
     let TRANSFER_DEADLINE = 20
     let PROTOCOL_PERCENTAGE_FEE = 5 // means 0.05%
-    let SLASHER_PERCENTAGE_REWARD = 5 // means 0.05%
-    let BITCOIN_FEE = 10000 // estimation of Bitcoin transaction fee in Satoshi
+    let LOCKER_PERCENTAGE_FEE = 15
+    let SLASHER_PERCENTAGE_REWARD = 500 // means 5%
+    let BITCOIN_FEE = 100 // estimation of Bitcoin transaction fee in Satoshi
     let TREASURY = "0x0000000000000000000000000000000000000002";
 
     let LOCKER_TARGET_ADDRESS = ONE_ADDRESS;
-    let LOCKER1_LOCKING_SCRIPT = '0x76a914748284390f9e263a4b766a75d0633c50426eb87587ac';
+    let LOCKER1_LOCKING_SCRIPT = '0x76a914e1c5ba4d1fef0a3c7806603de565929684f9c2b188ac';
 
-    let USER_SCRIPT_P2PKH = "0x12ab8dc588ca9d5787dde7eb29569da63c3a238c";
+    let USER_SCRIPT_P2PKH = "0x574fdd26858c28ede5225a809f747c01fcc1f92a";
     let USER_SCRIPT_P2PKH_TYPE = 1; // P2PKH
-
-    let USER_SCRIPT_P2WPKH = "0x751e76e8199196d454941c45d1b3a323f1433bd6";
+    let USER_SCRIPT_P2WPKH = "0xfe138aced14a5e7187d0fdd3b3dc651cc2a11693";
     let USER_SCRIPT_P2WPKH_TYPE = 3; // P2WPKH
 
     before(async () => {
@@ -79,10 +82,11 @@ describe("BurnRouter", async () => {
         [proxyAdmin, deployer, signer1, signer2] = await ethers.getSigners();
         proxyAdminAddress = await proxyAdmin.getAddress();
         signer1Address = await signer1.getAddress();
+        signer2Address = await signer2.getAddress();
         deployerAddress = await deployer.getAddress();
 
         // Mocks contracts
-    
+
         const bitcoinRelay = await deployments.getArtifact(
             "IBitcoinRelay"
         );
@@ -98,20 +102,11 @@ describe("BurnRouter", async () => {
             deployer,
             lockers.abi
         )
-
-        const exchangeConnector = await deployments.getArtifact(
-            "UniswapV2Connector"
-        );
-        mockExchangeConnector = await deployMockContract(
-            deployer,
-            exchangeConnector.abi
-        )
-
         // mock finalization parameter
         await mockBitcoinRelay.mock.finalizationParameter.returns(5);
 
         // Deploys contracts
-        teleBTC = await deployTeleBTC();
+        coreBTC = await deployCoreBTC();
         burnRouter = await deployBurnRouter();
 
         await burnRouter.initialize(
@@ -119,7 +114,7 @@ describe("BurnRouter", async () => {
             mockBitcoinRelay.address,
             mockLockers.address,
             TREASURY,
-            teleBTC.address,
+            coreBTC.address,
             TRANSFER_DEADLINE,
             PROTOCOL_PERCENTAGE_FEE,
             SLASHER_PERCENTAGE_REWARD,
@@ -135,14 +130,14 @@ describe("BurnRouter", async () => {
         );
         inputTokenSigner1 = await inputToken.connect(signer1);
 
-        // Mints TeleBTC for user
-        await teleBTC.addMinter(signer1Address)
-        TeleBTCSigner1 = await teleBTC.connect(signer1);
+        // Mints CoreBTC for user
+        await coreBTC.addMinter(signer1Address)
+        CoreBTCSigner1 = await coreBTC.connect(signer1);
 
-        await teleBTC.setMaxMintLimit(oneHundred.mul(2));
+        await coreBTC.setMaxMintLimit(oneHundred.mul(2));
         await moveBlocks(2020)
 
-        await TeleBTCSigner1.mint(signer1Address, oneHundred);
+        await CoreBTCSigner1.mint(signer1Address, oneHundred);
 
         // Connects signer1 and signer2 to burnRouter
         burnRouterSigner1 = await burnRouter.connect(signer1);
@@ -151,26 +146,50 @@ describe("BurnRouter", async () => {
 
     async function moveBlocks(amount: number) {
         for (let index = 0; index < amount; index++) {
-          await network.provider.request({
-            method: "evm_mine",
-            params: [],
-          })
+            await network.provider.request({
+                method: "evm_mine",
+                params: [],
+            })
         }
     }
 
-    const deployTeleBTC = async (
+    const deployCoreBTC = async (
         _signer?: Signer
-    ): Promise<TeleBTC> => {
-        const teleBTCFactory = new TeleBTC__factory(
+    ): Promise<CoreBTCLogic> => {
+        const coreBTCLogicFactory = new CoreBTCLogic__factory(
+            _signer || deployer
+        );
+        const coreBTCLogicImpl = await coreBTCLogicFactory.deploy();
+
+        const coreBTCProxyFactory = new CoreBTCProxy__factory(
             _signer || deployer
         );
 
-        const teleBTC = await teleBTCFactory.deploy(
-            "Teleport Wrapped BTC",
-            "TeleBTC"
+        const tokenName = "Core Wrapped BTC";
+        const tokenSymbol = "CoreBTC";
+        const methodSig = ethers.utils.id(
+            "initialize(string,string)"
+        );
+        const params = ethers.utils.defaultAbiCoder.encode(
+            ['string', 'string'],
+            [tokenName, tokenSymbol]
         );
 
-        return teleBTC;
+        const initCode = ethers.utils.solidityPack(
+            ['bytes', 'bytes'],
+            [methodSig.slice(0, 10), params]
+        );
+
+        const coreBTCProxy = await coreBTCProxyFactory.deploy(
+            coreBTCLogicImpl.address,
+            initCode
+        )
+
+        const coreBTCLogic = await coreBTCLogicFactory.attach(
+            coreBTCProxy.address
+        );
+
+        return coreBTCLogic;
     };
 
     const deployBurnRouterLib = async (
@@ -210,7 +229,6 @@ describe("BurnRouter", async () => {
         );
         const burnRouterProxy = await burnRouterProxyFactory.deploy(
             burnRouterLogic.address,
-            proxyAdminAddress,
             "0x"
         )
 
@@ -249,30 +267,23 @@ describe("BurnRouter", async () => {
         await mockBitcoinRelay.mock.lastSubmittedHeight.returns(blockNumber);
     }
 
-    async function setRelayCheckTxProofReturn(isFinal: boolean, relayFee?: number): Promise<void> {
-        await mockBitcoinRelay.mock.getBlockHeaderFee.returns(relayFee || 0); // Fee of relay
-        await mockBitcoinRelay.mock.checkTxProof
-            .returns(isFinal);
+    async function setRelayCheckTxProofReturn(isFinal: boolean): Promise<void> {
+        await mockBitcoinRelay.mock.checkTxProof.returns(isFinal);
     }
 
-    async function setSwap(result: boolean, amounts: number[]): Promise<void> {
-        await mockExchangeConnector.mock.swap
-            .returns(result, amounts);
-    }
-
-    async function mintTeleBTCForTest(): Promise<void> {
-        let TeleBTCSigner1 = await teleBTC.connect(signer1)
-        await TeleBTCSigner1.mint(signer1Address, oneHundred);
+    async function mintCoreBTCForTest(): Promise<void> {
+        let CoreBTCSigner1 = await coreBTC.connect(signer1)
+        await CoreBTCSigner1.mint(signer1Address, oneHundred);
     }
 
     async function sendBurnRequest(
         burnReqBlockNumber: number,
-        _userRequestedAmount: BigNumber,
+        _userRequestedAmount: number,
         USER_SCRIPT: any,
         USER_SCRIPT_TYPE: any
     ): Promise<number> {
         // Gives allowance to burnRouter
-        await TeleBTCSigner1.approve(
+        await CoreBTCSigner1.approve(
             burnRouter.address,
             _userRequestedAmount
         );
@@ -281,23 +292,23 @@ describe("BurnRouter", async () => {
         await setRelayLastSubmittedHeight(burnReqBlockNumber);
         await setLockersIsLocker(true);
         let _burntAmount: number;
-        let protocolFee = Math.floor(_userRequestedAmount.toNumber()*PROTOCOL_PERCENTAGE_FEE/10000);
-        _burntAmount = _userRequestedAmount.toNumber() - protocolFee;
+        let remainingAmount: number;
+        let protocolFee = Math.floor(_userRequestedAmount * PROTOCOL_PERCENTAGE_FEE / 10000);
+        remainingAmount = _userRequestedAmount - protocolFee;
+        let lockersFee = Math.floor(remainingAmount * LOCKER_PERCENTAGE_FEE / 10000);
+        _burntAmount = remainingAmount - lockersFee;
         await setLockersBurnReturn(_burntAmount);
-        let burntAmount = _burntAmount * (_burntAmount - BITCOIN_FEE) / _burntAmount; 
-        // first burntAmount should have been
-        // burntAmount - lockerFee but in this case we have assumed lockerFee = 0
+        let burntAmount = _burntAmount * (_burntAmount - BITCOIN_FEE) / _burntAmount;
+
 
         await setLockersGetLockerTargetAddress();
 
-        // Burns eleBTC
-        await burnRouterSigner1.ccBurn(
+        await expect(await burnRouterSigner1.ccBurn(
             _userRequestedAmount,
             USER_SCRIPT,
             USER_SCRIPT_TYPE,
             LOCKER1_LOCKING_SCRIPT
-        );
-
+        )).to.emit(burnRouterSigner1, 'CCBurn');
         return burntAmount;
     }
 
@@ -306,21 +317,18 @@ describe("BurnRouter", async () => {
         // Set mocks contracts outputs
         await setRelayCheckTxProofReturn(true);
         await setLockersIsLocker(true);
-
         let burntAmount: number;
-        let protocolFee = Math.floor(userRequestedAmount.toNumber()*PROTOCOL_PERCENTAGE_FEE/10000);
-        burntAmount = userRequestedAmount.toNumber() - BITCOIN_FEE - protocolFee;
+        let remainingAmount: number;
+        let protocolFee = Math.floor(userRequestedAmount * PROTOCOL_PERCENTAGE_FEE / 10000);
+        remainingAmount = userRequestedAmount - protocolFee;
+        let lockersFee = Math.floor(userRequestedAmount * LOCKER_PERCENTAGE_FEE / 10000);
+        burntAmount = remainingAmount - lockersFee;
         await setLockersBurnReturn(burntAmount);
-
         await setLockersGetLockerTargetAddress();
-
         // Provide proof that the locker has paid the burnt amount to the user(s)
         await expect(
             await burnRouterSigner2.burnProof(
-                CC_BURN_REQUESTS.burnProof_valid.version,
-                CC_BURN_REQUESTS.burnProof_valid.vin,
-                CC_BURN_REQUESTS.burnProof_valid.vout,
-                CC_BURN_REQUESTS.burnProof_valid.locktime,
+                CC_BURN_REQUESTS.burnProof_valid.tx,
                 burnReqBlockNumber,
                 CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                 1,
@@ -335,7 +343,7 @@ describe("BurnRouter", async () => {
 
         beforeEach(async () => {
             // Gives allowance to burnRouter to burn tokens
-            await TeleBTCSigner1.approve(
+            await CoreBTCSigner1.approve(
                 burnRouter.address,
                 userRequestedAmount
             );
@@ -359,6 +367,30 @@ describe("BurnRouter", async () => {
                     LOCKER1_LOCKING_SCRIPT
                 )
             ).to.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2PKH.slice(0, -2),
+                    USER_SCRIPT_P2PKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2WPKH + "00",
+                    USER_SCRIPT_P2WPKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2WPKH.slice(0, -2),
+                    USER_SCRIPT_P2WPKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.revertedWith("BurnRouter: invalid script")
 
             await expect(
                 burnRouterSigner1.ccBurn(
@@ -370,13 +402,65 @@ describe("BurnRouter", async () => {
             ).to.revertedWith("BurnRouter: invalid script")
 
         })
-        
-
-        it("Burns teleBTC for user", async function () {
+        it("User Script Type Length is Correct", async function () {
+            await burnRouter.setProtocolPercentageFee(0)
+            let lastSubmittedHeight = 100;
+            let USER_SCRIPT_P2TR = "0x96c0dd2bcc276600b96296e421f0778c2c75e9ad43dc117f699d8f76afffdb3c"
+            let USER_SCRIPT_P2TR_TYPE = 5
+            let USER_SCRIPT_P2SH_P2WPKH = "0x96c0dd2bcc276600b96296e421f0778c2c75e9ad43dc117f699d8f76afffdb3c"
+            let USER_SCRIPT_P2SH_P2WPKH_TYPE = 2
+            await CoreBTCSigner1.approve(
+                burnRouter.address,
+                userRequestedAmount
+            );
+            await setRelayLastSubmittedHeight(lastSubmittedHeight);
+            await setLockersIsLocker(true);
+            await setLockersBurnReturn(userRequestedAmount);
+            await setLockersGetLockerTargetAddress();
+            await burnRouterSigner1.ccBurn(
+                userRequestedAmount,
+                USER_SCRIPT_P2WPKH,
+                USER_SCRIPT_P2WPKH_TYPE,
+                LOCKER1_LOCKING_SCRIPT
+            )
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2WPKH,
+                    USER_SCRIPT_P2WPKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.not.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2PKH,
+                    USER_SCRIPT_P2PKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.not.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2TR,
+                    USER_SCRIPT_P2TR_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.not.revertedWith("BurnRouter: invalid script")
+            await expect(
+                burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2SH_P2WPKH,
+                    USER_SCRIPT_P2SH_P2WPKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.not.revertedWith("BurnRouter: invalid script")
+        })
+        it("Burns coreBTC for user", async function () {
             let lastSubmittedHeight = 100;
 
             // Gives allowance to burnRouter to burn tokens
-            await TeleBTCSigner1.approve(
+            await CoreBTCSigner1.approve(
                 burnRouter.address,
                 userRequestedAmount
             );
@@ -385,21 +469,21 @@ describe("BurnRouter", async () => {
             await setRelayLastSubmittedHeight(lastSubmittedHeight);
             await setLockersIsLocker(true);
 
-            // Finds amount of teleBTC that user should receive on Bitcoin
-            let protocolFee = Math.floor(userRequestedAmount.toNumber()*PROTOCOL_PERCENTAGE_FEE/10000);
-            let _burntAmount = userRequestedAmount.toNumber() - protocolFee;
+            // Finds amount of coreBTC that user should receive on Bitcoin
+            let protocolFee = Math.floor(userRequestedAmount * PROTOCOL_PERCENTAGE_FEE / 10000);
+            let _burntAmount = userRequestedAmount - protocolFee;
             await setLockersBurnReturn(_burntAmount);
 
-            let burntAmount = _burntAmount * (_burntAmount - BITCOIN_FEE) / _burntAmount; 
+            let burntAmount = _burntAmount * (_burntAmount - BITCOIN_FEE) / _burntAmount;
             // first burntAmount should have been
             // burntAmount - lockerFee but in this case we have assumed lockerFee = 0
 
             ;
             await setLockersGetLockerTargetAddress();
 
-            let prevBalanceSigner1 = await teleBTC.balanceOf(signer1Address);
+            let prevBalanceSigner1 = await coreBTC.balanceOf(signer1Address);
 
-            // Burns teleBTC
+            // Burns coreBTC
 
             await expect(
                 await burnRouterSigner1.ccBurn(
@@ -412,16 +496,14 @@ describe("BurnRouter", async () => {
                 signer1Address,
                 USER_SCRIPT_P2PKH,
                 USER_SCRIPT_P2PKH_TYPE,
-                0,
-                ZERO_ADDRESS,
                 userRequestedAmount,
-                burntAmount, 
+                burntAmount,
                 ONE_ADDRESS,
                 0,
                 lastSubmittedHeight + TRANSFER_DEADLINE
             );
 
-            let newBalanceSigner1 = await teleBTC.balanceOf(signer1Address);
+            let newBalanceSigner1 = await coreBTC.balanceOf(signer1Address);
 
             // Checks user's balance
             expect(
@@ -430,7 +512,7 @@ describe("BurnRouter", async () => {
 
             // Checks that protocol fee has been received
             expect(
-                await teleBTC.balanceOf(TREASURY)
+                await coreBTC.balanceOf(TREASURY)
             ).to.equal(protocolFee);
 
             // Gets the burn request that has been saved in the contract
@@ -441,12 +523,11 @@ describe("BurnRouter", async () => {
             ).to.equal(burntAmount);
 
         })
-
         it("Reverts since requested amount doesn't cover Bitcoin fee", async function () {
             let lastSubmittedHeight = 100;
 
             // Gives allowance to burnRouter to burn tokens
-            await TeleBTCSigner1.approve(
+            await CoreBTCSigner1.approve(
                 burnRouter.address,
                 BITCOIN_FEE - 1
             );
@@ -457,7 +538,7 @@ describe("BurnRouter", async () => {
             ;
             await setLockersGetLockerTargetAddress();
 
-            // Burns teleBTC
+            // Burns coreBTC
             await expect(
                 burnRouterSigner1.ccBurn(
                     BITCOIN_FEE - 1,
@@ -477,7 +558,7 @@ describe("BurnRouter", async () => {
             await setLockersGetLockerTargetAddress();
 
             // Gives allowance to burnRouter to burn tokens
-            await TeleBTCSigner1.approve(
+            await CoreBTCSigner1.approve(
                 burnRouter.address,
                 0
             );
@@ -489,7 +570,7 @@ describe("BurnRouter", async () => {
                     USER_SCRIPT_P2PKH_TYPE,
                     LOCKER1_LOCKING_SCRIPT
                 )
-            ).to.revertedWith("ERC20: transfer amount exceeds allowance")
+            ).to.revertedWith("ERC20: insufficient allowance")
         })
 
         it("Reverts since locker's locking script is not valid", async function () {
@@ -507,162 +588,6 @@ describe("BurnRouter", async () => {
         })
 
     });
-
-    describe("#ccExchangeAndBurn", async () => {
-
-        let inputTokenAmount = 100;
-        let lastSubmittedHeight = 100;
-        let protocolFee = Math.floor(userRequestedAmount.toNumber() * PROTOCOL_PERCENTAGE_FEE / 10000);
-        let _burntAmount = userRequestedAmount.toNumber() - protocolFee;
-        let burntAmount = _burntAmount * (_burntAmount - BITCOIN_FEE) / _burntAmount; 
-        // ^ burntAmount should be (burntAmount - lockerFee) but here we assumed lockerFee = 0
-
-        beforeEach(async () => {
-            // Sends teleBTC to burnRouter (since we mock swap)
-            await TeleBTCSigner1.transfer(
-                burnRouter.address,
-                userRequestedAmount
-            );
-
-            // Sends some inputToken to signer1 then he gives allowance to burnRouter
-            await inputToken.transfer(
-                signer1Address,
-                inputTokenAmount
-            );
-            await inputTokenSigner1.approve(
-                burnRouter.address,
-                inputTokenAmount
-            );
-
-            // Sets mock contracts outputs
-            await setRelayLastSubmittedHeight(lastSubmittedHeight);
-            await setLockersIsLocker(true);
-            await setLockersGetLockerTargetAddress();
-            await setLockersBurnReturn(_burntAmount); // Sets amount of teleBTC that user receives on Bitcoin
-
-            snapshotId = await takeSnapshot(signer1.provider);
-        });
-
-        afterEach(async () => {
-            await revertProvider(signer1.provider, snapshotId);
-        });
-
-        it("Exchanges input token for teleBTC then burns it", async function () {
-
-            let prevBalanceSigner1 = await inputToken.balanceOf(signer1Address);
-
-            await setSwap(true, [inputTokenAmount, userRequestedAmount.toNumber()])
-
-            // Exchanges input token then burns teleBTC
-            expect(
-                await burnRouterSigner1.ccExchangeAndBurn(
-                    mockExchangeConnector.address,
-                    [inputTokenAmount, userRequestedAmount],
-                    false, // output token amount is fixed
-                    [inputToken.address, teleBTC.address], // exchange path
-                    10000000000, // deadline
-                    USER_SCRIPT_P2PKH,
-                    USER_SCRIPT_P2PKH_TYPE,
-                    LOCKER1_LOCKING_SCRIPT
-                )
-            ).to.emit(burnRouter, "CCBurn").withArgs(
-                signer1Address,
-                USER_SCRIPT_P2PKH,
-                USER_SCRIPT_P2PKH_TYPE,
-                inputTokenAmount,
-                inputToken.address,
-                userRequestedAmount,
-                burntAmount, 
-                ONE_ADDRESS,
-                0,
-                lastSubmittedHeight + TRANSFER_DEADLINE
-            );
-
-            let newBalanceSigner1 = await inputToken.balanceOf(signer1Address);
-
-            // Checks user's balance
-            expect(
-                await newBalanceSigner1
-            ).to.equal(prevBalanceSigner1.sub(inputTokenAmount));
-
-            // Checks that protocol fee has been received
-            expect(
-                await teleBTC.balanceOf(TREASURY)
-            ).to.equal(protocolFee);
-
-            // Gets the burn request that has been saved in the contract
-            let theBurnRequest = await burnRouter.burnRequests(LOCKER_TARGET_ADDRESS, 0);
-
-            expect(
-                theBurnRequest.burntAmount
-            ).to.equal(burntAmount);
-
-        })
-
-        it("Reverts since exchange path is invalid", async function () {
-            await expect(
-                burnRouterSigner1.ccExchangeAndBurn(
-                    mockExchangeConnector.address,
-                    [inputTokenAmount, userRequestedAmount],
-                    false, // output token amount is fixed
-                    [inputToken.address, inputToken.address], // exchange path
-                    10000000000, // deadline
-                    USER_SCRIPT_P2PKH,
-                    USER_SCRIPT_P2PKH_TYPE,
-                    LOCKER1_LOCKING_SCRIPT
-                )
-            ).to.revertedWith("BurnRouter: invalid path");
-        })
-
-        it("Reverts since amounts is wrong", async function () {
-            await expect(
-                burnRouterSigner1.ccExchangeAndBurn(
-                    mockExchangeConnector.address,
-                    [inputTokenAmount, userRequestedAmount, userRequestedAmount],
-                    false, // output token amount is fixed
-                    [inputToken.address, teleBTC.address], // exchange path
-                    10000000000, // deadline
-                    USER_SCRIPT_P2PKH,
-                    USER_SCRIPT_P2PKH_TYPE,
-                    LOCKER1_LOCKING_SCRIPT
-                )
-            ).to.revertedWith("BurnRouter: wrong amounts");
-        })
-
-        it("Reverts since exchange failed", async function () {
-            await setSwap(false, [inputTokenAmount, userRequestedAmount.toNumber()])
-            await expect(
-                burnRouterSigner1.ccExchangeAndBurn(
-                    mockExchangeConnector.address,
-                    [inputTokenAmount, userRequestedAmount],
-                    false, // output token amount is fixed
-                    [inputToken.address, teleBTC.address], // exchange path
-                    10000000000, // deadline
-                    USER_SCRIPT_P2PKH,
-                    USER_SCRIPT_P2PKH_TYPE,
-                    LOCKER1_LOCKING_SCRIPT
-                )
-            ).to.revertedWith("BurnRouter: exchange failed");
-        })
-
-        it("Reverts since exchanged teleBTC is low", async function () {
-            await setSwap(true, [inputTokenAmount, 2 * BITCOIN_FEE - 1])
-            await expect(
-                burnRouterSigner1.ccExchangeAndBurn(
-                    mockExchangeConnector.address,
-                    [inputTokenAmount, userRequestedAmount],
-                    false, // output token amount is fixed
-                    [inputToken.address, teleBTC.address], // exchange path
-                    10000000000, // deadline
-                    USER_SCRIPT_P2PKH,
-                    USER_SCRIPT_P2PKH_TYPE,
-                    LOCKER1_LOCKING_SCRIPT
-                )
-            ).to.revertedWith("BurnRouter: low amount");
-        })
-
-    });
-
     describe("#burnProof", async () => {
         let burnReqBlockNumber = 100;
 
@@ -671,13 +596,13 @@ describe("BurnRouter", async () => {
         beforeEach(async () => {
             snapshotId = await takeSnapshot(signer1.provider);
 
-            // Mints TeleBTC for test
-            await mintTeleBTCForTest();
-
+            // Mints CoreBTC for test
+            await mintCoreBTCForTest();
+            let init_requested_amount = 14000
             // Sends a burn request
             burntAmount = await sendBurnRequest(
                 burnReqBlockNumber,
-                userRequestedAmount,
+                init_requested_amount,
                 USER_SCRIPT_P2PKH,
                 USER_SCRIPT_P2PKH_TYPE
             );
@@ -696,10 +621,7 @@ describe("BurnRouter", async () => {
 
             await expect(
                 await burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -721,35 +643,13 @@ describe("BurnRouter", async () => {
             ).to.equal(true);
         })
 
-        it("Reverts since _burnReqIndexes is not sorted", async function () {
-
-            // Sets mock contracts outputs
-            await setRelayCheckTxProofReturn(true);
-            await setLockersIsLocker(true);
-            await setLockersGetLockerTargetAddress();
-
-            await expect(
-                burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
-                    burnReqBlockNumber + 5,
-                    CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
-                    1,
-                    LOCKER1_LOCKING_SCRIPT,
-                    [0, 1],
-                    [1, 0]
-                )
-            ).to.be.revertedWith("BurnRouter: un-sorted vout indexes")
-        })
-
         it("Submits a valid burn proof (for P2WPKH)", async function () {
 
             // Sends a burn request
+            let ccBurnAmount = CC_BURN_REQUESTS.burnProof_validP2WPKH.ccBurnAmount;
             burntAmount = await sendBurnRequest(
                 burnReqBlockNumber,
-                userRequestedAmount,
+                ccBurnAmount,
                 USER_SCRIPT_P2WPKH,
                 USER_SCRIPT_P2WPKH_TYPE
             );
@@ -760,14 +660,11 @@ describe("BurnRouter", async () => {
             await setLockersGetLockerTargetAddress();
 
             await expect(
-                await burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_validP2WPKH.version,
-                    CC_BURN_REQUESTS.burnProof_validP2WPKH.vin,
-                    CC_BURN_REQUESTS.burnProof_validP2WPKH.vout,
-                    CC_BURN_REQUESTS.burnProof_validP2WPKH.locktime,
+                burnRouterSigner2.burnProof(
+                    CC_BURN_REQUESTS.burnProof_validP2WPKH.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_validP2WPKH.intermediateNodes,
-                    1,
+                    0,
                     LOCKER1_LOCKING_SCRIPT,
                     [1], // Burn req index
                     [0]
@@ -786,7 +683,16 @@ describe("BurnRouter", async () => {
             ).to.equal(true);
         })
 
-        it("Submits a valid burn proof which doesn't have change vout", async function () {
+        it("Submits a valid burn proof (for P2TR)", async function () {
+
+            // Sends a burn request
+            let ccBurnAmount = CC_BURN_REQUESTS.burnProof_validP2TR.ccBurnAmount;
+            burntAmount = await sendBurnRequest(
+                burnReqBlockNumber,
+                ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_validP2TR.userScript,
+                CC_BURN_REQUESTS.burnProof_validP2TR.userScriptType
+            );
 
             // Sets mock contracts outputs
             await setRelayCheckTxProofReturn(true);
@@ -794,39 +700,96 @@ describe("BurnRouter", async () => {
             await setLockersGetLockerTargetAddress();
 
             await expect(
-                await burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.version,
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.vin,
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.vout,
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.locktime,
+                burnRouterSigner2.burnProof(
+                    CC_BURN_REQUESTS.burnProof_validP2TR.tx,
                     burnReqBlockNumber + 5,
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.intermediateNodes,
-                    1,
+                    CC_BURN_REQUESTS.burnProof_validP2TR.intermediateNodes,
+                    0,
                     LOCKER1_LOCKING_SCRIPT,
-                    [0],
+                    [1], // Burn req index
                     [0]
                 )
             ).to.emit(burnRouter, "PaidCCBurn").withArgs(
                 LOCKER_TARGET_ADDRESS,
-                0,
-                CC_BURN_REQUESTS.burnProof_validWithoutChange.txId,
+                1,
+                CC_BURN_REQUESTS.burnProof_validP2TR.txId,
                 0
             );
 
             expect(
                 await burnRouter.isUsedAsBurnProof(
-                    CC_BURN_REQUESTS.burnProof_validWithoutChange.txId
+                    CC_BURN_REQUESTS.burnProof_validP2TR.txId
                 )
             ).to.equal(true);
+        })
+
+        it("Submits a valid burn proof (for P2SH-P2WPKH)", async function () {
+
+            // Sends a burn request
+            let ccBurnAmount = CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.ccBurnAmount;
+            burntAmount = await sendBurnRequest(
+                burnReqBlockNumber,
+                ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.userScript,
+                CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.userScriptType
+            );
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+
+            await expect(
+                burnRouterSigner2.burnProof(
+                    CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.intermediateNodes,
+                    0,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [1], // Burn req index
+                    [0]
+                )
+            ).to.emit(burnRouter, "PaidCCBurn").withArgs(
+                LOCKER_TARGET_ADDRESS,
+                1,
+                CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.txId,
+                0
+            );
+
+            expect(
+                await burnRouter.isUsedAsBurnProof(
+                    CC_BURN_REQUESTS.burnProof_validP2SH_P2WPKH.txId
+                )
+            ).to.equal(true);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 1)
+            ).to.equal(true);
+        })
+
+        it("Reverts since _burnReqIndexes is not sorted", async function () {
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+
+            await expect(
+                burnRouterSigner2.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [0, 1],
+                    [1, 0]
+                )
+            ).to.be.revertedWith("BurnRouter: un-sorted vout indexes")
         })
 
         it("Reverts since locktime is non-zero", async function () {
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    '0x00000001',
+                    CC_BURN_REQUESTS.burnProof_invalid_locktime.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -843,10 +806,7 @@ describe("BurnRouter", async () => {
 
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -867,10 +827,7 @@ describe("BurnRouter", async () => {
             // Should revert when start index is bigger than end index
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -883,10 +840,7 @@ describe("BurnRouter", async () => {
             // Should revert when end index is bigger than total number of burn requests
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -897,28 +851,6 @@ describe("BurnRouter", async () => {
             ).to.revertedWith("BurnRouter: wrong index")
         })
 
-        it("Reverts since paid fee is not enough", async function () {
-            // Sets mock contracts outputs
-            await setRelayCheckTxProofReturn(true, 1);
-            await setLockersIsLocker(true);
-            await setLockersGetLockerTargetAddress();
-
-            await expect(
-                burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
-                    burnReqBlockNumber + 5,
-                    CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
-                    1,
-                    LOCKER_TARGET_ADDRESS,
-                    [0],
-                    [0]
-                )
-            ).to.revertedWith("BitcoinRelay: low fee");
-        })
-
         it("Reverts if locker's tx has not been finalized on relay", async function () {
             // Sets mock contracts outputs
             await setRelayCheckTxProofReturn(false);
@@ -927,10 +859,7 @@ describe("BurnRouter", async () => {
 
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -943,7 +872,7 @@ describe("BurnRouter", async () => {
 
         it("Reverts if vout is null", async function () {
             // Sends a burn request
-            await sendBurnRequest(burnReqBlockNumber, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
+            await sendBurnRequest(burnReqBlockNumber, 1111, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
 
             // Sets mock contracts outputs
             await setRelayCheckTxProofReturn(true);
@@ -953,22 +882,19 @@ describe("BurnRouter", async () => {
             // Should revert with a wrong start index
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    "0x0000",
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_vout_null.tx,
                     burnReqBlockNumber + 5,
-                    CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
+                    CC_BURN_REQUESTS.burnProof_vout_null.intermediateNodes,
                     1,
                     LOCKER_TARGET_ADDRESS,
                     [0],
                     [0]
                 )
-            ).to.revertedWith("BitcoinHelper: vout is null")
+            ).to.revertedWith("BitcoinHelper: invalid tx")
         })
 
         it("Doesn't accept burn proof since the paid amount is not exact", async function () {
-            let wrongUserRequestAmount = BigNumber.from(100080000)
+            let wrongUserRequestAmount = 1000
             let burnReqBlockNumber = 100;
 
             // Send a burn request
@@ -982,10 +908,7 @@ describe("BurnRouter", async () => {
             // Should revert with a wrong start index
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -1008,10 +931,7 @@ describe("BurnRouter", async () => {
             await setLockersGetLockerTargetAddress();
 
             await burnRouterSigner2.burnProof(
-                CC_BURN_REQUESTS.burnProof_valid.version,
-                CC_BURN_REQUESTS.burnProof_valid.vin,
-                CC_BURN_REQUESTS.burnProof_valid.vout,
-                CC_BURN_REQUESTS.burnProof_valid.locktime,
+                CC_BURN_REQUESTS.burnProof_valid.tx,
                 burnReqBlockNumber + 5,
                 CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                 1,
@@ -1026,10 +946,7 @@ describe("BurnRouter", async () => {
 
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + 5,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -1049,10 +966,7 @@ describe("BurnRouter", async () => {
 
             await expect(
                 burnRouterSigner2.burnProof(
-                    CC_BURN_REQUESTS.burnProof_valid.version,
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.burnProof_valid.locktime,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
                     burnReqBlockNumber + TRANSFER_DEADLINE + 1,
                     CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
                     1,
@@ -1067,7 +981,7 @@ describe("BurnRouter", async () => {
             ).to.equal(false);
         })
 
-        it("Doesn't accept burn proof since change address is invalid", async function () {
+        it("should reject vout with an invalid address", async function () {
 
             // Sets mock contracts outputs
             await setRelayCheckTxProofReturn(true);
@@ -1075,12 +989,9 @@ describe("BurnRouter", async () => {
             await setLockersGetLockerTargetAddress();
 
             await burnRouterSigner2.burnProof(
-                CC_BURN_REQUESTS.burnProof_invalidChange.version,
-                CC_BURN_REQUESTS.burnProof_invalidChange.vin,
-                CC_BURN_REQUESTS.burnProof_invalidChange.vout,
-                CC_BURN_REQUESTS.burnProof_invalidChange.locktime,
+                CC_BURN_REQUESTS.burnProof_invalid_vout.tx,
                 burnReqBlockNumber + 5,
-                CC_BURN_REQUESTS.burnProof_invalidChange.intermediateNodes,
+                CC_BURN_REQUESTS.burnProof_invalid_vout.intermediateNodes,
                 1,
                 LOCKER1_LOCKING_SCRIPT,
                 [0],
@@ -1093,21 +1004,219 @@ describe("BurnRouter", async () => {
 
             expect(
                 await burnRouter.isUsedAsBurnProof(
-                    CC_BURN_REQUESTS.burnProof_invalidChange.txId
+                    CC_BURN_REQUESTS.burnProof_invalid_vout.txId
                 )
             ).to.equal(false);
+
+        })
+
+        it("Submits valid burn proof with multiple vouts", async function () {
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount1,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [1, 2],
+                    [0, 1]
+                )
+            ).to.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId
+                )
+            ).to.equal(true);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 1)
+            ).to.equal(true);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 2)
+            ).to.equal(true);
+
+        })
+        it("Successfully verifies one vout in burn proof with multiple outputs", async function () {
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount1,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [2, 1],
+                    [1, 2]
+                )
+            ).to.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(false);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 1)
+            ).to.equal(false);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 2)
+            ).to.equal(true);
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [0, 2],
+                    [0, 1]
+                )
+            ).to.not.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(false);
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [1, 2],
+                    [0, 1]
+                )
+            ).to.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 1)).to.equal(true);
+
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(true);
+        })
+        it("Successively verifies vout in a transaction with multiple payments", async function () {
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount1,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [2],
+                    [1]
+                )
+            ).to.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(false);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 1)
+            ).to.equal(false);
+            expect(
+                await burnRouter.isTransferred(LOCKER_TARGET_ADDRESS, 2)
+            ).to.equal(true);
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [1],
+                    [0]
+                )
+            ).to.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(false);
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    burnReqBlockNumber + 5,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [1, 2],
+                    [0, 1]
+                )
+            ).to.not.emit(burnRouterSigner2, 'PaidCCBurn')
+            expect(
+                await burnRouter.isUsedAsBurnProof(CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.txId)
+            ).to.equal(true);
+
+        })
+        it("Reverts on expired ccburn request", async function () {
+
+            // Sets mock contracts outputs
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+            await expect(
+                burnRouter.burnProof(
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.tx,
+                    0,
+                    CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.intermediateNodes,
+                    1,
+                    LOCKER1_LOCKING_SCRIPT,
+                    [0],
+                    [0]
+                )
+            ).to.revertedWith('BurnRouter: old request')
 
         })
     });
 
     describe("#disputeBurn", async () => {
         let burnReqBlockNumber = 100;
-
         beforeEach(async () => {
             snapshotId = await takeSnapshot(signer1.provider);
-            // Mints TeleBTC for test
-            await mintTeleBTCForTest();
-
+            // Mints CoreBTC for test
+            await mintCoreBTCForTest();
+            await burnRouter.setSlasher(deployerAddress);
             // Sends a burn request
             await sendBurnRequest(100, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
         });
@@ -1118,14 +1227,31 @@ describe("BurnRouter", async () => {
 
         it("Disputes locker successfully", async function () {
             // Sets mock contracts
-            await setRelayLastSubmittedHeight(burnReqBlockNumber + TRANSFER_DEADLINE + 1);
             await setLockersSlashIdleLockerReturn();
             await setLockersIsLocker(true);
-
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await sendBurnRequest(
+                burnReqBlockNumber,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount1,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await setRelayLastSubmittedHeight(burnReqBlockNumber + TRANSFER_DEADLINE + 2);
             await expect(
-                burnRouterSigner2.disputeBurn(
+                burnRouter.disputeBurn(
                     LOCKER_TARGET_ADDRESS,
                     [0]
+                )
+            ).to.emit(burnRouter, "BurnDispute");
+            await expect(
+                burnRouter.disputeBurn(
+                    LOCKER_TARGET_ADDRESS,
+                    [1, 2]
                 )
             ).to.not.reverted;
         })
@@ -1136,17 +1262,17 @@ describe("BurnRouter", async () => {
             await setLockersSlashIdleLockerReturn();
             await setLockersIsLocker(true);
 
-            await burnRouterSigner2.disputeBurn(
+            await burnRouter.disputeBurn(
                 LOCKER_TARGET_ADDRESS,
                 [0]
             );
 
             await expect(
-                burnRouterSigner2.disputeBurn(
+                burnRouter.disputeBurn(
                     LOCKER_TARGET_ADDRESS,
                     [0]
                 )
-            ).to.revertedWith("BurnRouter: already paid")
+            ).to.revertedWith("BurnRouterLogic: already paid")
         })
 
         it("Reverts since locking script is invalid", async function () {
@@ -1155,7 +1281,7 @@ describe("BurnRouter", async () => {
             await setLockersIsLocker(false);
 
             await expect(
-                burnRouterSigner2.disputeBurn(
+                burnRouter.disputeBurn(
                     LOCKER_TARGET_ADDRESS,
                     [0]
                 )
@@ -1172,11 +1298,11 @@ describe("BurnRouter", async () => {
             await provideProof(burnReqBlockNumber + 5);
 
             await expect(
-                burnRouterSigner2.disputeBurn(
+                burnRouter.disputeBurn(
                     LOCKER_TARGET_ADDRESS,
                     [0]
                 )
-            ).to.revertedWith("BurnRouter: already paid")
+            ).to.revertedWith("BurnRouterLogic: already paid")
         })
 
         it("Reverts since deadline hasn't reached", async function () {
@@ -1186,20 +1312,56 @@ describe("BurnRouter", async () => {
 
             // Locker will not get slashed because the deadline of transfer has not reached
             await expect(
-                burnRouterSigner2.disputeBurn(
+                burnRouter.disputeBurn(
                     LOCKER_TARGET_ADDRESS,
                     [0]
                 )
-            ).to.revertedWith("BurnRouter: deadline not passed")
+            ).to.revertedWith("BurnRouterLogic: deadline not passed")
+        })
+        it("Reverts on expired ccburn request", async function () {
+            // Set mock contracts outputs
+            await sendBurnRequest(
+                0,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await setLockersIsLocker(true);
+            await setRelayLastSubmittedHeight(100);
+            // Locker will not get slashed because the deadline of transfer has not reached
+            await expect(
+                burnRouter.disputeBurn(
+                    LOCKER_TARGET_ADDRESS,
+                    [1]
+                )
+            ).to.revertedWith("BurnRouterLogic: old request")
+        })
+        it("Reverts when non-slasher tries to disputeBurn", async function () {
+            await setLockersIsLocker(true);
+            await setRelayLastSubmittedHeight(100);
+            await sendBurnRequest(
+                0,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.ccBurnAmount,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScript,
+                CC_BURN_REQUESTS.burnProof_valid_multiple_vouts.userScriptType
+            );
+            await expect(
+                burnRouterSigner1.disputeBurn(
+                    LOCKER_TARGET_ADDRESS,
+                    [1]
+                )
+            ).to.revertedWith("BurnRouter: caller is not the slasher")
         })
 
     });
 
     describe("#disputeLocker", async () => {
         let burnReqBlockNumber = 100;
-
         beforeEach(async () => {
             snapshotId = await takeSnapshot(signer1.provider);
+            await burnRouter.transferOwnership(signer2Address);
+            await burnRouterSigner2.acceptOwnership();
+            await burnRouterSigner2.setSlasher(signer2Address);
         });
 
         afterEach(async () => {
@@ -1209,6 +1371,7 @@ describe("BurnRouter", async () => {
         it("Dispute the locker who has sent its BTC to external account", async function () {
 
             // Sets mock contracts outputs
+
             await setRelayCheckTxProofReturn(true);
             await setLockersIsLocker(true);
             await setRelayLastSubmittedHeight(burnReqBlockNumber + TRANSFER_DEADLINE + 1);
@@ -1218,12 +1381,8 @@ describe("BurnRouter", async () => {
             await expect(
                 await burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
@@ -1233,53 +1392,40 @@ describe("BurnRouter", async () => {
                 burnReqBlockNumber,
                 CC_BURN_REQUESTS.disputeLocker_input.txId,
                 CC_BURN_REQUESTS.disputeLocker_input.OutputValue +
-                CC_BURN_REQUESTS.disputeLocker_input.OutputValue*SLASHER_PERCENTAGE_REWARD/10000
-            );
+                CC_BURN_REQUESTS.disputeLocker_input.OutputValue * SLASHER_PERCENTAGE_REWARD / 10000);
         })
 
-        it("Reverts since inputs are not valid", async function () {
-
+        it("Reverts on invalid index and block height", async function () {
+            await setLockersIsLocker(true);
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
-                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
-                    [0, 1, burnReqBlockNumber]
-                )
-            ).to.revertedWith("BurnRouter: wrong inputs");
-
-            await expect(
-                burnRouterSigner2.disputeLocker(
-                    LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime],
-                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
-                    [0, 1, burnReqBlockNumber]
-                )
-            ).to.revertedWith("BurnRouter: wrong inputs");
-
-            await expect(
-                burnRouterSigner2.disputeLocker(
-                    LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1]
                 )
-            ).to.revertedWith("BurnRouter: wrong inputs")
+            ).to.revertedWith("BurnRouterLogic: wrong inputs");
+            await expect(
+                burnRouterSigner2.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    [0]
+                )
+            ).to.revertedWith("BurnRouterLogic: wrong inputs");
+
+            await expect(
+                burnRouterSigner2.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    []
+                )
+            ).to.revertedWith("BurnRouterLogic: wrong inputs")
+
         })
 
         it("Reverts since locking script is not valid", async function () {
@@ -1290,12 +1436,8 @@ describe("BurnRouter", async () => {
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
@@ -1311,37 +1453,40 @@ describe("BurnRouter", async () => {
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
-            ).to.revertedWith("BurnRouter: not finalized");
+            ).to.revertedWith("BurnRouterLogic: not finalized");
         })
 
-        it("Reverts since input tx has been used as burn proof", async function () {
+        it("Reverts due to input tx being already disputed by Dispute Locker", async function () {
 
             // Sets mock contracts outputs
-            await setRelayCheckTxProofReturn(false);
+            await setRelayCheckTxProofReturn(true);
             await setLockersIsLocker(true);
-
+            await setRelayLastSubmittedHeight(burnReqBlockNumber + TRANSFER_DEADLINE + 1);
+            await setLockersGetLockerTargetAddress();
+            await setLockersSlashThiefLockerReturn();
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
-            ).to.revertedWith("BurnRouter: not finalized");
+            ).to.emit(burnRouterSigner2, "LockerDispute");
+            await expect(
+                burnRouterSigner2.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    [0, 1, burnReqBlockNumber]
+                )
+            ).to.revertedWith("BurnRouterLogic: already used");
         })
 
         it("Reverts since outpoint doesn't match with output tx", async function () {
@@ -1356,12 +1501,8 @@ describe("BurnRouter", async () => {
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_invalidOutput.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_invalidOutput.vin,
-                    CC_BURN_REQUESTS.disputeLocker_invalidOutput.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_invalidOutput.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_invalidOutput.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
@@ -1380,12 +1521,8 @@ describe("BurnRouter", async () => {
             await expect(
                 burnRouterSigner2.disputeLocker(
                     "0x76a914748284390f9e263a4b766a75d0633c50426eb87587ab",
-                    [CC_BURN_REQUESTS.disputeLocker_input.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.disputeLocker_input.vin,
-                    CC_BURN_REQUESTS.disputeLocker_input.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.disputeLocker_input.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
+                    CC_BURN_REQUESTS.disputeLocker_input.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
                     CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
@@ -1400,24 +1537,72 @@ describe("BurnRouter", async () => {
             await setRelayLastSubmittedHeight(burnReqBlockNumber);
             await setLockersGetLockerTargetAddress();
             await setLockersSlashIdleLockerReturn();
-
             // User sends a burn request and locker provides burn proof for it
-            await sendBurnRequest(100, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
+            await sendBurnRequest(burnReqBlockNumber, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
             await provideProof(burnReqBlockNumber + 5);
 
             await expect(
                 burnRouterSigner2.disputeLocker(
                     LOCKER1_LOCKING_SCRIPT,
-                    [CC_BURN_REQUESTS.burnProof_valid.version, CC_BURN_REQUESTS.disputeLocker_output.version],
-                    CC_BURN_REQUESTS.burnProof_valid.vin,
-                    CC_BURN_REQUESTS.burnProof_valid.vout,
-                    CC_BURN_REQUESTS.disputeLocker_output.vin,
-                    CC_BURN_REQUESTS.disputeLocker_output.vout,
-                    [CC_BURN_REQUESTS.burnProof_valid.locktime, CC_BURN_REQUESTS.disputeLocker_output.locktime],
-                    CC_BURN_REQUESTS.burnProof_valid.intermediateNodes,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
                     [0, 1, burnReqBlockNumber]
                 )
-            ).to.revertedWith("BurnRouter: already used");
+            ).to.revertedWith("BurnRouterLogic: already used");
+        })
+        it("Reverts if the deadline is not yet passed", async function () {
+
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setLockersGetLockerTargetAddress();
+            await setLockersSlashIdleLockerReturn();
+            await sendBurnRequest(burnReqBlockNumber, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
+            await expect(
+                burnRouterSigner2.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    [0, 1, burnReqBlockNumber]
+                )
+            ).to.revertedWith("BurnRouterLogic: deadline not passed");
+        })
+        it("Reverts on processing an old request", async function () {
+
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setRelayLastSubmittedHeight(burnReqBlockNumber);
+            await setLockersGetLockerTargetAddress();
+            await setLockersSlashIdleLockerReturn();
+            await sendBurnRequest(burnReqBlockNumber, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
+            await expect(
+                burnRouterSigner2.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    [0, 1, 0]
+                )
+            ).to.revertedWith("BurnRouterLogic: old request");
+        })
+        it("Reverts when non-slasher tries to disputeLocker", async function () {
+
+            await setRelayCheckTxProofReturn(true);
+            await setLockersIsLocker(true);
+            await setRelayLastSubmittedHeight(burnReqBlockNumber);
+            await setLockersGetLockerTargetAddress();
+            await setLockersSlashIdleLockerReturn();
+            await sendBurnRequest(burnReqBlockNumber, userRequestedAmount, USER_SCRIPT_P2PKH, USER_SCRIPT_P2PKH_TYPE);
+            await expect(
+                burnRouter.disputeLocker(
+                    LOCKER1_LOCKING_SCRIPT,
+                    CC_BURN_REQUESTS.burnProof_valid.tx,
+                    CC_BURN_REQUESTS.disputeLocker_output.tx,
+                    CC_BURN_REQUESTS.disputeLocker_input.intermediateNodes,
+                    [0, 1, 0]
+                )
+            ).to.revertedWith("BurnRouter: caller is not the slasher");
         })
     });
 
@@ -1448,11 +1633,20 @@ describe("BurnRouter", async () => {
                 burnRouter.setProtocolPercentageFee(10001)
             ).to.revertedWith("BurnRouter: invalid fee");
         })
+        it("Sets starting block number", async function () {
+            await burnRouter.setStartingBlockNumber(100);
+            expect(
+                await burnRouter.startingBlockNumber()
+            ).to.equal(100);
+            await expect(
+                burnRouter.setStartingBlockNumber(99)
+            ).to.revertedWith("BurnRouter: low startingBlockNumber");
+        })
+
 
         it("Sets transfer deadline", async function () {
 
             await mockBitcoinRelay.mock.finalizationParameter.returns(10);
-
             await expect(
                 burnRouter.setTransferDeadline(100)
             ).to.emit(
@@ -1464,6 +1658,19 @@ describe("BurnRouter", async () => {
                 await burnRouter.transferDeadline()
             ).to.equal(100);
         })
+
+        it("Reverts on setting transfer deadline without permit", async function () {
+            await mockBitcoinRelay.mock.finalizationParameter.returns(10);
+            await expect(
+                burnRouter.setTransferDeadline(100)
+            ).to.emit(burnRouter, "NewTransferDeadline");
+
+            await mockBitcoinRelay.mock.finalizationParameter.returns(210);
+            await expect(
+                burnRouter.connect(signer2).setTransferDeadline(211)
+            ).to.emit(burnRouter, "NewTransferDeadline");
+        })
+
 
         it("Reverts since transfer deadline is smaller than relay finalizatio parameter", async function () {
             await mockBitcoinRelay.mock.finalizationParameter.returns(10);
@@ -1501,6 +1708,16 @@ describe("BurnRouter", async () => {
             ).to.revertedWith("BurnRouter: invalid reward");
         })
 
+
+        it("Sets BitcoinFeeOracle", async function () {
+            await expect(
+                burnRouter.setBitcoinFeeOracle(ONE_ADDRESS)
+            ).to.emit(
+                burnRouter, "NewBitcoinFeeOracle"
+            ).withArgs(deployerAddress, ONE_ADDRESS);
+        })
+
+
         it("Sets bitcoin fee", async function () {
             await expect(
                 burnRouter.setBitcoinFee(100)
@@ -1514,7 +1731,7 @@ describe("BurnRouter", async () => {
             ).to.equal(100);
         })
 
-        it("Sets relay, lockers, teleBTC and treasury", async function () {
+        it("Sets relay, lockers, coreBTC，Slasher and treasury", async function () {
             await expect(
                 burnRouter.setRelay(ONE_ADDRESS)
             ).to.emit(
@@ -1536,13 +1753,13 @@ describe("BurnRouter", async () => {
             ).to.equal(ONE_ADDRESS);
 
             await expect(
-                burnRouter.setTeleBTC(ONE_ADDRESS)
+                burnRouter.setCoreBTC(ONE_ADDRESS)
             ).to.emit(
-                burnRouter, "NewTeleBTC"
-            ).withArgs(teleBTC.address, ONE_ADDRESS);
+                burnRouter, "NewCoreBTC"
+            ).withArgs(coreBTC.address, ONE_ADDRESS);
 
             expect(
-                await burnRouter.teleBTC()
+                await burnRouter.coreBTC()
             ).to.equal(ONE_ADDRESS);
 
             await expect(
@@ -1550,10 +1767,15 @@ describe("BurnRouter", async () => {
             ).to.emit(
                 burnRouter, "NewTreasury"
             ).withArgs(TREASURY, ONE_ADDRESS);
-
-
             expect(
                 await burnRouter.treasury()
+            ).to.equal(ONE_ADDRESS);
+             await expect(
+                burnRouter.setSlasher(ONE_ADDRESS)
+            ).to.emit(burnRouter,'NewSlasher')
+                 .withArgs(ZERO_ADDRESS, ONE_ADDRESS);
+              expect(
+                await burnRouter.slasher()
             ).to.equal(ONE_ADDRESS);
 
         })
@@ -1568,12 +1790,33 @@ describe("BurnRouter", async () => {
             ).to.revertedWith("BurnRouter: zero address");
 
             await expect(
-                burnRouter.setTeleBTC(ZERO_ADDRESS)
+                burnRouter.setCoreBTC(ZERO_ADDRESS)
             ).to.revertedWith("BurnRouter: zero address");
 
             await expect(
                 burnRouter.setTreasury(ZERO_ADDRESS)
             ).to.revertedWith("BurnRouter: zero address");
+        })
+
+        it("Reverts when non-owner attempts to call the function", async function () {
+            await expect(
+                burnRouterSigner2.setRelay(ONE_ADDRESS)
+            ).to.revertedWith("Ownable: caller is not the owner");
+
+            await expect(
+                burnRouterSigner2.setLockers(ONE_ADDRESS)
+            ).to.revertedWith("Ownable: caller is not the owner");
+
+            await expect(
+                burnRouterSigner2.setCoreBTC(ONE_ADDRESS)
+            ).to.revertedWith("Ownable: caller is not the owner");
+
+            await expect(
+                burnRouterSigner2.setTreasury(ONE_ADDRESS)
+            ).to.revertedWith("Ownable: caller is not the owner");
+             await expect(
+                burnRouterSigner2.setSlasher(ONE_ADDRESS)
+            ).to.revertedWith("Ownable: caller is not the owner");
         })
 
     });
