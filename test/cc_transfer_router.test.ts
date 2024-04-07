@@ -21,6 +21,9 @@ import {LockersLib__factory} from "../src/types/factories/LockersLib__factory";
 import {CoreBTCLogic} from "../src/types/CoreBTCLogic";
 import {CoreBTCLogic__factory} from "../src/types/factories/CoreBTCLogic__factory";
 import {CoreBTCProxy__factory} from "../src/types/factories/CoreBTCProxy__factory";
+import {CollateralsLogic__factory} from "../src/types/factories/CollateralsLogic__factory";
+import {CollateralsProxy__factory} from "../src/types/factories/CollateralsProxy__factory";
+import {CollateralsLogic, IERC20} from "../src/types";
 
 import {takeSnapshot, revertProvider} from "./block_utils";
 
@@ -65,6 +68,7 @@ describe("CcTransferRouter", async () => {
     let coreBTC: CoreBTCLogic;
     let lockersLib: LockersLib;
     let lockers: Contract;
+    let collaterals: Contract;
 
     // Mock contracts
     let mockBitcoinRelay: MockContract;
@@ -139,8 +143,13 @@ describe("CcTransferRouter", async () => {
         // Adds lockers contract as minter and burner in coreBTC
         await coreBTC.addMinter(lockers.address)
         await coreBTC.addBurner(lockers.address)
-
         await ccTransferRouter.setLockers(lockers.address)
+
+        collaterals = await deployCollateral()
+        await collaterals.initialize(lockers.address, minRequiredTNTLockedAmount)
+        lockers.setCollaterals(collaterals.address)
+
+
     });
     const deployCoreBTC = async (
         _signer?: Signer
@@ -169,6 +178,26 @@ describe("CcTransferRouter", async () => {
             coreBTCProxy.address
         )
         return coreBTC;
+    };
+    const deployCollateral = async (
+        _signer?: Signer
+    ): Promise<CollateralsLogic> => {
+        const collateralLogicFactory = new CollateralsLogic__factory(
+            deployer
+        );
+        const collateralLogic = await collateralLogicFactory.deploy();
+        // Deploys lockers proxy
+        const CollateralProxyFactory = new CollateralsProxy__factory(
+            deployer
+        );
+        const collateralProxy = await CollateralProxyFactory.deploy(
+            collateralLogic.address,
+            "0x"
+        )
+        const collateralsLogic = await collateralLogic.attach(
+            collateralProxy.address
+        );
+        return collateralsLogic;
     };
 
     const deployLockersLib = async (
@@ -221,7 +250,6 @@ describe("CcTransferRouter", async () => {
         await lockers.initialize(
             coreBTC.address,
             mockPriceOracle.address,
-            minRequiredTNTLockedAmount,
             collateralRatio,
             liquidationRatio,
             LOCKER_PERCENTAGE_FEE,
@@ -243,6 +271,7 @@ describe("CcTransferRouter", async () => {
             minRequiredTNTLockedAmount,
             LOCKER_RESCUE_SCRIPT_P2PKH_TYPE,
             LOCKER_RESCUE_SCRIPT_P2PKH,
+            ONE_ADDRESS,
             {value: minRequiredTNTLockedAmount}
         )
         // Deployer (owner of lockers) adds locker to lockers
@@ -583,6 +612,7 @@ describe("CcTransferRouter", async () => {
                 minRequiredTNTLockedAmount,
                 LOCKER_RESCUE_SCRIPT_P2PKH_TYPE,
                 LOCKER_RESCUE_SCRIPT_P2PKH,
+                ONE_ADDRESS,
                 {value: minRequiredTNTLockedAmount}
             )
             // Deployer (owner of lockers) adds locker to lockers
@@ -721,13 +751,13 @@ describe("CcTransferRouter", async () => {
                 await ccTransferRouter.protocolPercentageFee()
             ).to.equal(100);
         })
-        
+
         it("Sets Starting BlockNumber", async function () {
             await ccTransferRouter.setStartingBlockNumber(100)
             expect(
                 await ccTransferRouter.startingBlockNumber()
             ).to.equal(100);
-            await expect( ccTransferRouter.setStartingBlockNumber(99)).to.revertedWith(
+            await expect(ccTransferRouter.setStartingBlockNumber(99)).to.revertedWith(
                 "CCTransferRouter: low startingBlockNumber"
             )
         })

@@ -21,6 +21,10 @@ describe("PriceOracle", async () => {
     let ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
     let ONE_ADDRESS = "0x0000000000000000000000000000000000000001";
     let TWO_ADDRESS = "0x0000000000000000000000000000000000000002";
+    const EARN_EXCHANGE_RATE = 10 ** 6
+    const MOCK_EARN_EXCHANGE_RATE = 1250000
+    const EARN_EXCHANGE = MOCK_EARN_EXCHANGE_RATE / EARN_EXCHANGE_RATE
+
 
     // Accounts
     let deployer: Signer;
@@ -33,10 +37,13 @@ describe("PriceOracle", async () => {
     let erc20: Erc20;
     let _erc20: Erc20;
     let coreBTC: CoreBTCLogic;
+    let STErc20: Erc20;
 
     // Mock contracts
     let mockPriceProxy: MockContract;
     let _mockPriceProxy: MockContract;
+    let mockEarn: MockContract;
+
 
     // Values
     let acceptableDelay: number;
@@ -61,6 +68,12 @@ describe("PriceOracle", async () => {
             "ATT",
             1000
         );
+        STErc20 = await erc20Factory.deploy(
+            "STCore",
+            "STC",
+            1000
+        );
+
 
         // Deploys collateralPool contract
         acceptableDelay = 120; // seconds
@@ -79,9 +92,18 @@ describe("PriceOracle", async () => {
             IPriceProxy.abi
         );
 
+        const MockIEarnStrategy = await deployments.getArtifact(
+            "MockIEarnStrategy"
+        );
+        mockEarn = await deployMockContract(deployer, MockIEarnStrategy.abi);
+
+        await priceOracle.setEarnWrappedToken(STErc20.address)
+        await priceOracle.setEarnStrategy(mockEarn.address)
+
         await priceOracle.addTokenPricePair(erc20.address, 'TT/USDT');
         await priceOracle.addTokenPricePair(_erc20.address, 'ATT/USDT');
         await priceOracle.addTokenPricePair(coreBTC.address, 'BTC/USDT');
+        await priceOracle.addTokenPricePair(ONE_ADDRESS, 'CORE/USDT');
         await priceOracle.addPriceProxy(_mockPriceProxy.address)
         await priceOracle.addPriceProxy(mockPriceProxy.address)
 
@@ -176,13 +198,13 @@ describe("PriceOracle", async () => {
         it("successfully adds token-price pair", async function () {
             let pricePairName = 'TEST/USDT'
             await expect(
-                priceOracle.addTokenPricePair(ONE_ADDRESS, pricePairName)
+                priceOracle.addTokenPricePair(TWO_ADDRESS, pricePairName)
             ).to.emit(priceOracle, 'NewTokenPricePair').withArgs(
-                ONE_ADDRESS,
+                TWO_ADDRESS,
                 '',
                 pricePairName
             );
-            let thePricePairMap = await priceOracle.pricePairMap(ONE_ADDRESS)
+            let thePricePairMap = await priceOracle.pricePairMap(TWO_ADDRESS)
             expect(pricePairName).to.equal(thePricePairMap)
         })
 
@@ -190,20 +212,20 @@ describe("PriceOracle", async () => {
             let pricePairNameBefore = 'TA/USDT'
             let pricePairNameAfter = 'TB/USDT'
             await expect(
-                priceOracle.addTokenPricePair(ONE_ADDRESS, pricePairNameBefore)
+                priceOracle.addTokenPricePair(TWO_ADDRESS, pricePairNameBefore)
             ).to.emit(priceOracle, 'NewTokenPricePair').withArgs(
-                ONE_ADDRESS,
+                TWO_ADDRESS,
                 '',
                 pricePairNameBefore
             );
             await expect(
-                priceOracle.addTokenPricePair(ONE_ADDRESS, pricePairNameAfter)
+                priceOracle.addTokenPricePair(TWO_ADDRESS, pricePairNameAfter)
             ).to.emit(priceOracle, 'NewTokenPricePair').withArgs(
-                ONE_ADDRESS,
+                TWO_ADDRESS,
                 pricePairNameBefore,
                 pricePairNameAfter
             );
-            let thePricePairMap = await priceOracle.pricePairMap(ONE_ADDRESS)
+            let thePricePairMap = await priceOracle.pricePairMap(TWO_ADDRESS)
             expect(thePricePairMap).to.equal(pricePairNameAfter)
         })
 
@@ -369,7 +391,11 @@ describe("PriceOracle", async () => {
                 const _erc20Address = _erc20.address.toLowerCase()
                 const publishTime = timeStamp.toString(16)
                 await setNextBlockTimestamp(240);
+
                 await mockFunctionsPriceProxy(btcPrice, btcPriceDecimals, timeStamp + 240, erc20Price, erc20PriceDecimals, timeStamp);
+                let timeStamp1 = await getLastBlockTimestamp();
+                let timeDiff0 = timeStamp1 - timeStamp
+                let diff0 = "0x" + timeDiff0.toString(16);
                 await expect(
                     priceOracle.equivalentOutputAmount(
                         amountIn,
@@ -378,9 +404,11 @@ describe("PriceOracle", async () => {
                         erc20.address,
                         _erc20.address
                     )
-                ).to.be.revertedWith("" +
-                    "PriceOracle: price is expired, token " + _erc20Address + ", publishTime 0x" + publishTime);
+                ).to.be.revertedWith("PriceOracle: price is expired, token " + _erc20Address + ", publishTime 0x" + publishTime + `, diffTime ${diff0}`);
                 await mockFunctionsPriceProxy(btcPrice, btcPriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                let timeStamp2 = await getLastBlockTimestamp();
+                let timeDiff1 = timeStamp2 - timeStamp
+                let diff1 = "0x" + timeDiff1.toString(16);
                 await expect(
                     priceOracle.equivalentOutputAmount(
                         amountIn,
@@ -390,7 +418,7 @@ describe("PriceOracle", async () => {
                         _erc20.address
                     )
                 ).to.be.revertedWith(
-                    "PriceOracle: price is expired, token " + erc20Address + ", publishTime 0x" + publishTime);
+                    "PriceOracle: price is expired, token " + erc20Address + ", publishTime 0x" + publishTime + `, diffTime ${diff1}`);
             }
         )
         it("recovers when bestPriceProxy address is zero", async function () {
@@ -491,6 +519,182 @@ describe("PriceOracle", async () => {
                     )).to.equal(amountIn / price * Math.pow(10, decimals));
             }
         )
+        it("Calculates equivalent output amount successfully （stCore -> coreBTC）", async function () {
+                timeStamp = await getLastBlockTimestamp();
+                await priceOracle.selectBestPriceProxy(mockPriceProxy.address);
+                await mockFunctionsPriceProxy(btcPrice, btcPriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                await mockEarn.mock.getCurrentExchangeRate.returns(MOCK_EARN_EXCHANGE_RATE)
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        coreBTC.address,
+                        STErc20.address
+                    )).to.equal(amountIn * price * Math.pow(10, decimals) / EARN_EXCHANGE);
+                await mockFunctionsPriceProxy(erc20Price, erc20PriceDecimals, timeStamp, btcPrice, btcPriceDecimals, timeStamp);
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        STErc20.address,
+                        coreBTC.address
+                    )).to.equal(amountIn / price * Math.pow(10, decimals) * EARN_EXCHANGE);
+            }
+        )
+        it("Calculates equivalent output amount successfully（stCore -> core)", async function () {
+                timeStamp = await getLastBlockTimestamp();
+                await priceOracle.selectBestPriceProxy(mockPriceProxy.address);
+                await mockFunctionsPriceProxy(erc20Price, erc20PriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                await mockEarn.mock.getCurrentExchangeRate.returns(MOCK_EARN_EXCHANGE_RATE)
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        STErc20.address,
+                        ONE_ADDRESS
+                    )).to.equal(amountIn * EARN_EXCHANGE * Math.pow(10, decimals));
+                await mockFunctionsPriceProxy(erc20Price, erc20PriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        ONE_ADDRESS,
+                        STErc20.address
+                    )).to.equal(amountIn / EARN_EXCHANGE * Math.pow(10, decimals));
+            }
+        )
+        it("Calculates equivalent output amount successfully（stCore -> stCore）", async function () {
+                timeStamp = await getLastBlockTimestamp();
+                await priceOracle.selectBestPriceProxy(mockPriceProxy.address);
+                await mockFunctionsPriceProxy(erc20Price, erc20PriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                await mockEarn.mock.getCurrentExchangeRate.returns(MOCK_EARN_EXCHANGE_RATE)
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        STErc20.address,
+                        STErc20.address
+                    )).to.equal(amountIn * Math.pow(10, decimals));
+            }
+        )
+        it("Calculates equivalent output amount successfully（USDT -> USDT）", async function () {
+                await priceOracle.addTokenPricePair(TWO_ADDRESS, 'USDT/USDT');
+                timeStamp = await getLastBlockTimestamp();
+                await priceOracle.selectBestPriceProxy(mockPriceProxy.address);
+                expect(
+                    await priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        TWO_ADDRESS,
+                        TWO_ADDRESS
+                    )).to.equal(amountIn * Math.pow(10, decimals));
+            }
+        )
+        it("USDT price is fixed", async function () {
+                const SwitchboardPriceProxy = await ethers.getContractFactory("SwitchboardPriceProxy");
+                const switchboardPriceProxy = await SwitchboardPriceProxy.deploy(mockPriceProxy.address);
+                await switchboardPriceProxy.deployed();
+                let [price0, err0] = await switchboardPriceProxy.getEmaPriceByPairName('USDT/USDT');
+                expect(price0.price).to.equal(1);
+                let [price1, err1] = await switchboardPriceProxy.getEmaPriceByPairName('TT/USDT');
+                expect(price1.price).to.equal(0);
+            }
+        )
+        it("Reverts when equivalentOutputAmount exchange rate error", async function () {
+                timeStamp = await getLastBlockTimestamp();
+                await priceOracle.selectBestPriceProxy(mockPriceProxy.address);
+                await mockFunctionsPriceProxy(erc20Price, erc20PriceDecimals, timeStamp, erc20Price, erc20PriceDecimals, timeStamp);
+                await mockEarn.mock.getCurrentExchangeRate.returns(10000)
+                await expect(
+                    priceOracle.equivalentOutputAmount(
+                        amountIn,
+                        inDecimals,
+                        outDecimals,
+                        coreBTC.address,
+                        STErc20.address
+                    )).to.revertedWith(`PriceOracle: token ${STErc20.address.toLowerCase()}, earn rate 0x2710, earn decimals 0x06`)
+            }
+        )
+
+    });
+    describe("#setEarnWrappedToken", async () => {
+
+        beforeEach(async () => {
+            snapshotId = await takeSnapshot(signer1.provider);
+        });
+
+        afterEach(async () => {
+            await revertProvider(signer1.provider, snapshotId);
+        });
+
+        it("Reverts when non-owner calls the function", async function () {
+            await expect(
+                priceOracle.connect(signer1).setEarnWrappedToken(ONE_ADDRESS)
+            ).to.revertedWith('Ownable: caller is not the owner')
+        })
+
+        it("Sets WrappedToken successfully", async function () {
+            await expect(
+                priceOracle.setEarnWrappedToken(ONE_ADDRESS)
+            ).to.be.emit(priceOracle, 'NewEarnWrappedToken')
+            let WrappedToken = await priceOracle.earnWrappedToken();
+            expect(WrappedToken).to.be.equal(ONE_ADDRESS);
+
+        })
+        it("Reverts when setting WrappedToken to the same value", async function () {
+            await priceOracle.setEarnWrappedToken(ONE_ADDRESS)
+            await expect(
+                priceOracle.setEarnWrappedToken(ONE_ADDRESS)
+            ).to.revertedWith('PriceOracle: earn wrapped token unchanged')
+        })
+        it("Reverts when address is set to zero", async function () {
+            await expect(
+                priceOracle.setEarnWrappedToken(ZERO_ADDRESS)
+            ).to.revertedWith('PriceOracle: zero address')
+        })
+
+    });
+    describe("#setEarnStrategy", async () => {
+
+        beforeEach(async () => {
+            snapshotId = await takeSnapshot(signer1.provider);
+        });
+
+        afterEach(async () => {
+            await revertProvider(signer1.provider, snapshotId);
+        });
+        it("Reverts when non-owner calls the function", async function () {
+            await expect(
+                priceOracle.connect(signer1).setEarnStrategy(ONE_ADDRESS)
+            ).to.revertedWith('Ownable: caller is not the owner')
+        })
+
+        it("Sets EarnStrategy successfully", async function () {
+            await expect(
+                priceOracle.setEarnStrategy(ONE_ADDRESS)
+            ).to.be.emit(priceOracle, 'NewEarnStrategy')
+            let EarnStrategy = await priceOracle.earnStrategy();
+            expect(EarnStrategy).to.be.equal(ONE_ADDRESS);
+        })
+        it("Reverts when setting EarnStrategy to the same value", async function () {
+            await priceOracle.setEarnStrategy(ONE_ADDRESS)
+            await expect(
+                priceOracle.setEarnStrategy(ONE_ADDRESS)
+            ).to.revertedWith('PriceOracle: earn strategy unchanged')
+        })
+
+        it("Reverts when address is set to zero", async function () {
+            await expect(
+                priceOracle.setEarnStrategy(ZERO_ADDRESS)
+            ).to.revertedWith('PriceOracle: zero address')
+        })
+
 
     });
 

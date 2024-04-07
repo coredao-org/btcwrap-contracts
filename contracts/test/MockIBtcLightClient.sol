@@ -6,3 +6,7 @@ interface MockIBtcLightClient {
 
     function getChainTipHeight() external view returns (uint);
 }
+interface MockIEarnStrategy {
+    
+    function getCurrentExchangeRate() external view returns (uint);
+}
