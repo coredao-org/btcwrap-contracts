@@ -1,6 +1,7 @@
 import {revertProvider, takeSnapshot} from "./block_utils";
 
 require('dotenv').config({path: "../../.env"});
+import Web3 from 'web3';
 import {expect} from "chai";
 import {deployments, ethers} from "hardhat";
 import {Signer, BigNumber, utils} from "ethers";
@@ -105,7 +106,17 @@ describe("collaterals ", async () => {
         await collaterals.removeCollateral(token);
     }
 
-
+    function encodeErrorMessage(functionSignature: string, args: any[]) {
+        const web3 = new Web3();
+        const selector = web3.utils.keccak256(functionSignature).slice(0, 10);
+        const argsInFunctionSignature = functionSignature.slice(
+            functionSignature.indexOf('(') + 1,
+            functionSignature.indexOf(')')
+        ).replace(/\s/g, '').split(',');
+        const encodedArgs = web3.eth.abi.encodeParameters(argsInFunctionSignature, args);
+        return selector + encodedArgs.slice(2);
+    }
+    
     describe("#initialize", async () => {
         it("initialize can be called only once", async function () {
             await expect(collaterals.initialize(mockLockers.address, minRequiredTNTLockedAmount)
@@ -125,11 +136,10 @@ describe("collaterals ", async () => {
         it("Reverts when locked amount is less than minimum collateral requirement", async function () {
             let minLockedAmount = await collaterals.getMinLockedAmount(NATIVE_TOKEN)
             expect(minLockedAmount).to.equal(minRequiredTNTLockedAmount)
+            const encodedCall = encodeErrorMessage('InsufficientCollateral(address,uint256,uint256)',
+                [NATIVE_TOKEN, minRequiredTNTLockedAmount.sub(1), minLockedAmount]);
             await expect(collaterals.checkLockedAmount(NATIVE_TOKEN, minRequiredTNTLockedAmount.sub(1))
-            ).to.be.revertedWith("Lockers: low collateral, " +
-                "lockedToken 0x0000000000000000000000000000000000000001, " +
-                "lockedAmount 0x4563918244f3ffff, " +
-                "minLockedAmount 0x4563918244f40000")
+            ).to.be.revertedWith(encodedCall)
         })
         it("Reverts when checking locked amount with zero token address", async function () {
             await expect(collaterals.checkLockedAmount(ZERO_ADDRESS, minRequiredTNTLockedAmount)
@@ -146,7 +156,7 @@ describe("collaterals ", async () => {
 
 
     })
-    
+
     describe("#addCollateral", async () => {
         beforeEach(async () => {
             snapshotId = await takeSnapshot(signer1.provider);

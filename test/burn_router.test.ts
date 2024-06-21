@@ -523,6 +523,38 @@ describe("BurnRouter", async () => {
             ).to.equal(burntAmount);
 
         })
+        
+        it("Successfully performs CCBurn when locker burntAmount is 0", async function () {
+            let lastSubmittedHeight = 100;
+
+            // Gives allowance to burnRouter to burn tokens
+            await CoreBTCSigner1.approve(
+                burnRouter.address,
+                userRequestedAmount
+            );
+            // Sets mock contracts outputs
+            await setRelayLastSubmittedHeight(lastSubmittedHeight);
+            await setLockersIsLocker(true);
+            await setLockersBurnReturn(0);
+            await setLockersGetLockerTargetAddress();
+            await expect(
+                await burnRouterSigner1.ccBurn(
+                    userRequestedAmount,
+                    USER_SCRIPT_P2PKH,
+                    USER_SCRIPT_P2PKH_TYPE,
+                    LOCKER1_LOCKING_SCRIPT
+                )
+            ).to.emit(burnRouter, "CCBurn").withArgs(
+                signer1Address,
+                USER_SCRIPT_P2PKH,
+                USER_SCRIPT_P2PKH_TYPE,
+                userRequestedAmount,
+                0,
+                ONE_ADDRESS,
+                0,
+                lastSubmittedHeight + TRANSFER_DEADLINE
+            );
+        })
         it("Reverts since requested amount doesn't cover Bitcoin fee", async function () {
             let lastSubmittedHeight = 100;
 

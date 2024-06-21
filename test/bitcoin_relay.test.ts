@@ -51,7 +51,7 @@ describe("Bitcoin Relay", async () => {
 
 
         const BtcLightClientContract = await deployments.getArtifact(
-            "MockIBtcLightClient"
+            "IBtcLightClient"
         );
         mockBtcLightClient = await deployMockContract(deployer, BtcLightClientContract.abi);
         BitcoinRelay.initialize(

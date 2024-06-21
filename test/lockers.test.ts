@@ -1,3 +1,5 @@
+import Web3 from "web3";
+
 require('dotenv').config({path: "../../.env"});
 
 import {expect} from "chai";
@@ -38,6 +40,7 @@ describe("Lockers", async () => {
     let liquidationRatio = 15000;
     let NATIVE_TOKEN = "0x0000000000000000000000000000000000000001";
     let TWO_ADDRESS = "0x0000000000000000000000000000000000000002";
+    let TX_ID = '0x0000000000000000000000000000000000000000000000000000000000000001';
     const LOCKER_PERCENTAGE_FEE = 20; // Means %0.2
     const PRICE_WITH_DISCOUNT_RATIO = 9500; // Means %95
     const INACTIVATION_DELAY = 355600;
@@ -345,7 +348,7 @@ describe("Lockers", async () => {
                     LOCKER_PERCENTAGE_FEE,
                     PRICE_WITH_DISCOUNT_RATIO + 10000
                 )
-            ).to.be.revertedWith("Lockers: less than 100%")
+            ).to.be.revertedWith("Lockers: less than or equal to 100%")
         })
 
     })
@@ -551,7 +554,6 @@ describe("Lockers", async () => {
 
         it("contract paused successsfully", async function () {
             let lockerSigner1 = lockers.connect(signer1)
-            let txId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await lockers.pauseLocker()
             await expect(
                 lockerSigner1.slashIdleLocker(
@@ -589,7 +591,7 @@ describe("Lockers", async () => {
                 lockerSigner1.mint(
                     signer1Address,
                     signer2Address,
-                    txId,
+                    TX_ID,
                     10000
                 )
             ).to.be.revertedWith("Pausable: paused")
@@ -711,6 +713,14 @@ describe("Lockers", async () => {
             expect(
                 await lockers.slashCompensationRatio()
             ).to.equal(105)
+        })
+        it("reverts if compensation rate is greater than 100", async function () {
+
+            await expect(
+                lockers.setSlashCompensationRatio(
+                    10001
+                )
+            ).to.be.revertedWith('Lockers: less than or equal to 100%')
         })
     })
 
@@ -956,22 +966,21 @@ describe("Lockers", async () => {
         afterEach(async () => {
             await revertProvider(signer1.provider, snapshotId);
         });
-        it("low message value", async function () {
-            let lockerSigner1 = lockers.connect(signer1)
+        it("Reverts on low collateral quantity", async function () {
+            let lockerSigner1 = lockers.connect(signer1);
+            let lockedAmount = minRequiredNativeTokenLockedAmount.sub(10);
+            const error = `InsufficientCollateral("${NATIVE_TOKEN}", ${lockedAmount}, ${minRequiredNativeTokenLockedAmount})`;
             await expect(
                 lockerSigner1.requestToBecomeLocker(
                     // LOCKER1,
                     LOCKER1_PUBKEY__HASH,
-                    minRequiredNativeTokenLockedAmount.sub(10),
+                    lockedAmount,
                     LOCKER_RESCUE_SCRIPT_P2PKH_TYPE,
                     LOCKER_RESCUE_SCRIPT_P2PKH,
                     NATIVE_TOKEN,
-                    {value: minRequiredNativeTokenLockedAmount.sub(10)}
+                    {value: lockedAmount}
                 )
-            ).to.be.revertedWith("Lockers: low collateral, " +
-                "lockedToken 0x0000000000000000000000000000000000000001, " +
-                "lockedAmount 0x4563918244f3fff6, " +
-                "minLockedAmount 0x4563918244f40000")
+            ).to.be.revertedWith(error)
         })
         it("ensures value and NativeTokenLockedAmount are not equal", async function () {
             let lockerSigner1 = lockers.connect(signer1)
@@ -985,7 +994,7 @@ describe("Lockers", async () => {
                     NATIVE_TOKEN,
                     {value: minRequiredNativeTokenLockedAmount.sub(1)}
                 )
-            ).to.be.revertedWith("Lockers: low TNT")
+            ).to.be.revertedWith("Lockers: incorrect CORE amount")
         })
 
         it("successful request to become locker", async function () {
@@ -1335,7 +1344,7 @@ describe("Lockers", async () => {
                 )
             ).to.equal(LOCKER1_PUBKEY__HASH)
         })
-        
+
         it("Reverts when adding duplicate lockerLockingScript", async function () {
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000)
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
@@ -1468,7 +1477,6 @@ describe("Lockers", async () => {
         it("the locker can't be removed because netMinted is not zero", async function () {
 
             let lockerSigner1 = lockers.connect(signer1)
-            let txId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
             await lockers.addLocker(signer1Address)
 
@@ -1476,18 +1484,12 @@ describe("Lockers", async () => {
             await lockers.addMinter(signer2Address);
             let lockerSigner2 = lockers.connect(signer2)
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, txId, 1000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 1000);
 
             await lockerSigner1.requestInactivation();
-            let theLockerMapping = await lockers.lockersMapping(signer1Address)
-            // let lastBlockTimestamp = await getTimestamp();
-            // expect(theLockerMapping.inactivationTimestamp).equal(1111)
-
-
             // Forwards block.timestamp to inactivate locker
             let lastBlockTimestamp = await getTimestamp();
             await advanceBlockWithTime(deployer.provider, lastBlockTimestamp + INACTIVATION_DELAY);
-            let lastBlockTimestamp1 = await getTimestamp();
 
             await expect(
                 lockerSigner1.selfRemoveLocker()
@@ -1496,7 +1498,6 @@ describe("Lockers", async () => {
         it("cannot remove locker when slashing TBTC is greater than 0", async function () {
             let TNTAmount = 10000;
             let CoreBTCAmount = 1000;
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TNTAmount)
             // Signer 1 becomes a locker
@@ -1508,7 +1509,7 @@ describe("Lockers", async () => {
 
             await lockers.addMinter(signer1Address);
 
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = lockers.connect(ccBurnSimulator)
 
@@ -1524,7 +1525,7 @@ describe("Lockers", async () => {
             await lockerSigner1.requestInactivation();
             let lastBlockTimestamp = await getTimestamp();
             await advanceBlockWithTime(deployer.provider, lastBlockTimestamp + INACTIVATION_DELAY);
-            await expect(lockerSigner1.selfRemoveLocker()).to.be.revertedWith('Lockers: 0 slashing TBTC')
+            await expect(lockerSigner1.selfRemoveLocker()).to.be.revertedWith('Lockers: 0 slashing COREBTC')
 
         })
 
@@ -1720,7 +1721,6 @@ describe("Lockers", async () => {
             let CoreBTCAmount = 500;
             let rewardAmount = 100;
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TntAmount);
             // Signer 1 becomes a locker
@@ -1729,7 +1729,7 @@ describe("Lockers", async () => {
             await lockers.addLocker(signer1Address);
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
 
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = lockers.connect(ccBurnSimulator)
@@ -1755,7 +1755,6 @@ describe("Lockers", async () => {
             let TntAmount = BigNumber.from(10).pow(18).mul(2)
             let CoreBTCAmount = 500;
             let rewardAmount = 100;
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TntAmount);
             // Signer 1 becomes a locker
@@ -1764,7 +1763,7 @@ describe("Lockers", async () => {
             await lockers.addLocker(signer1Address);
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, mockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
 
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = lockers.connect(ccBurnSimulator)
@@ -1803,7 +1802,6 @@ describe("Lockers", async () => {
 
             let TNTAmount = 10000;
             let CoreBTCAmount = 1000;
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TNTAmount)
 
@@ -1816,7 +1814,7 @@ describe("Lockers", async () => {
 
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
 
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = await lockers.connect(ccBurnSimulator)
@@ -1846,7 +1844,6 @@ describe("Lockers", async () => {
 
             let TNTAmount = 10000;
             let CoreBTCAmount = 1000;
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TNTAmount)
 
@@ -1859,7 +1856,7 @@ describe("Lockers", async () => {
 
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
 
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = await lockers.connect(ccBurnSimulator)
@@ -1890,7 +1887,6 @@ describe("Lockers", async () => {
 
             let TNTAmount = 10000;
             let CoreBTCAmount = 1000;
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TNTAmount)
 
@@ -1903,7 +1899,7 @@ describe("Lockers", async () => {
 
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
 
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = await lockers.connect(ccBurnSimulator)
@@ -1944,7 +1940,6 @@ describe("Lockers", async () => {
 
             let TNTAmount = 10000;
             let CoreBTCAmount = 1000;
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             // Initialize mock contract (how much TNT locker should be penalized)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(TNTAmount)
 
@@ -1956,7 +1951,7 @@ describe("Lockers", async () => {
             // Locker mints some CoreBTC and gets BTC on Bitcoin
             await lockers.addMinter(signer1Address);
 
-            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, CoreBTCAmount);
+            await lockerSigner1.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, CoreBTCAmount);
             // ccBurn calls to slash the locker
             let lockerCCBurnSigner = await lockers.connect(ccBurnSimulator)
 
@@ -2003,7 +1998,6 @@ describe("Lockers", async () => {
 
         it("Mints core BTC", async function () {
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
             await lockers.addLocker(signer1Address);
@@ -2015,7 +2009,7 @@ describe("Lockers", async () => {
             amount = 1000;
             let lockerFee = Math.floor(amount * LOCKER_PERCENTAGE_FEE / 10000);
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, amount);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, amount);
 
             let theLockerMapping = await lockers.lockersMapping(signer1Address);
 
@@ -2036,7 +2030,6 @@ describe("Lockers", async () => {
 
         it("Mints core BTC (custom token as collateral)", async function () {
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
 
             await lockers.addLocker(signer1Address);
@@ -2048,7 +2041,7 @@ describe("Lockers", async () => {
             amount = 1000;
             let lockerFee = Math.floor(amount * LOCKER_PERCENTAGE_FEE / 10000);
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, amount);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, amount);
 
             let theLockerMapping = await lockers.lockersMapping(signer1Address);
             expect(
@@ -2069,7 +2062,6 @@ describe("Lockers", async () => {
 
         it("can't mint core BTC above capacity", async function () {
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
             await lockers.addLocker(signer1Address);
@@ -2079,15 +2071,14 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await expect(
-                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, 5001)
+                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 5001)
             ).to.be.revertedWith("Lockers: insufficient capacity")
 
         })
 
         it("allows only the minter to mint tokens", async function () {
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await expect(
-                lockers.connect(signer1).mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, 1000)
+                lockers.connect(signer1).mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 1000)
             ).to.be.revertedWith("Lockers: only minters can mint")
         })
 
@@ -2106,9 +2097,8 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await expect(
-                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ZERO_ADDRESS, MockTxId, 25000000)
+                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ZERO_ADDRESS, TX_ID, 25000000)
             ).to.be.revertedWith("Lockers: address is zero")
         })
 
@@ -2120,7 +2110,6 @@ describe("Lockers", async () => {
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
 
             let lockerSigner1 = lockers.connect(signer1)
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
             await lockers.addLocker(signer1Address);
@@ -2142,7 +2131,7 @@ describe("Lockers", async () => {
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
 
             await expect(
-                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, MockTxId, 25000000)
+                lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 25000000)
             ).to.be.revertedWith("Lockers: not active")
         })
 
@@ -2164,7 +2153,6 @@ describe("Lockers", async () => {
 
         it("Burns core BTC", async function () {
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
             await lockers.addLocker(signer1Address)
@@ -2174,7 +2162,7 @@ describe("Lockers", async () => {
 
             let lockerSigner2 = lockers.connect(signer2)
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, MockTxId, 1000)
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 1000)
 
             let theLockerMapping = await lockers.lockersMapping(signer1Address);
 
@@ -2203,7 +2191,6 @@ describe("Lockers", async () => {
         })
         it("Burns core BTC (CustomToken collateral)", async function () {
 
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
 
             await lockers.addLocker(signer1Address)
@@ -2212,7 +2199,7 @@ describe("Lockers", async () => {
 
             let lockerSigner2 = lockers.connect(signer2)
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, MockTxId, 1000)
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 1000)
 
             await coreBTC.mint(signer2Address, 10000000);
 
@@ -2232,6 +2219,32 @@ describe("Lockers", async () => {
 
 
         })
+        it("Burns core BTC with 100% lockerFee rate", async function () {
+
+            await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
+
+            await lockers.addLocker(signer1Address)
+            await lockers.addMinter(signer2Address)
+            await lockers.addBurner(signer2Address)
+
+            let lockerSigner2 = lockers.connect(signer2)
+
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 1000)
+
+            await coreBTC.mint(signer2Address, 10000000);
+
+            let coreBTCSigner2 = coreBTC.connect(signer2)
+            let new_locker_percentage_fee = 10000
+            await lockers.setLockerPercentageFee(new_locker_percentage_fee)
+            amount = 1000;
+            await coreBTCSigner2.approve(lockers.address, amount);
+            await expect(lockerSigner2.burn(LOCKER1_PUBKEY__HASH, amount)).to.emit(coreBTC, 'Burn').withArgs(
+                lockers.address,
+                lockers.address,
+                0
+            )
+        })
+
         it("allows only the minter to mint tokens", async function () {
             await expect(lockers.burn(LOCKER1_PUBKEY__HASH, 1000)).to.be.revertedWith('Lockers: only burners can burn');
         })
@@ -2263,8 +2276,6 @@ describe("Lockers", async () => {
         it("can't liquidate because it's above liquidation ratio", async function () {
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
-            let MockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
-            let lockerSigner1 = lockers.connect(signer1)
 
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
@@ -2274,7 +2285,7 @@ describe("Lockers", async () => {
 
             let lockerSigner2 = lockers.connect(signer2)
 
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, MockTxId, 5000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 5000000);
 
             await expect(
                 lockerSigner2.liquidateLocker(signer1Address, 5000)
@@ -2285,7 +2296,6 @@ describe("Lockers", async () => {
         it("can't liquidate because it's above the liquidated amount", async function () {
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
 
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
 
@@ -2296,7 +2306,7 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, mockTxId, 25000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 25000000);
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(7000000);
 
@@ -2311,7 +2321,6 @@ describe("Lockers", async () => {
         it("can't liquidate because it's above the liquidated amount (custom token as collateral)", async function () {
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
 
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
 
@@ -2322,7 +2331,7 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, mockTxId, 25000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, ONE_ADDRESS, TX_ID, 25000000);
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(7000000);
 
@@ -2339,7 +2348,6 @@ describe("Lockers", async () => {
 
             await lockers.setCCBurnRouter(mockCCBurnRouter.address);
             await mockCCBurnRouter.mock.ccBurn.returns(8000);
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
 
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
@@ -2351,7 +2359,7 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, mockTxId, 25000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 25000000);
 
 
             let coreBTCSigner2 = await coreBTC.connect(signer2);
@@ -2362,7 +2370,7 @@ describe("Lockers", async () => {
             await mockPriceOracle.mock.equivalentOutputAmount.returns(7000000);
 
             await expect(
-                await lockerSigner2.liquidateLocker(
+                lockerSigner2.liquidateLocker(
                     signer1Address,
                     BigNumber.from(10).pow(18).mul(2)
                 )
@@ -2377,11 +2385,37 @@ describe("Lockers", async () => {
 
 
         });
+        it("reverts when liquidate amount to burn is zero", async function () {
+
+            await lockers.setCCBurnRouter(mockCCBurnRouter.address);
+            await mockCCBurnRouter.mock.ccBurn.returns(0);
+            await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
+
+            await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
+
+            await lockers.addLocker(signer1Address);
+
+            await lockers.addMinter(signer2Address);
+
+            let lockerSigner2 = lockers.connect(signer2)
+            await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 25000000);
+            let coreBTCSigner2 = await coreBTC.connect(signer2);
+            await coreBTCSigner2.approve(lockers.address, 13300000 + 1) // add 1 bcz of precision loss
+            await mockPriceOracle.mock.equivalentOutputAmount.returns(7000000);
+            await expect(
+                lockerSigner2.liquidateLocker(
+                    signer1Address,
+                    BigNumber.from(10).pow(18).mul(2)
+                )
+            ).to.be.revertedWith('Lockers: burnt amount is zero')
+
+
+        });
         it("successfully liquidate the locker (custom token as collateral)", async function () {
 
             await lockers.setCCBurnRouter(mockCCBurnRouter.address);
             await mockCCBurnRouter.mock.ccBurn.returns(8000);
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
 
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
@@ -2393,7 +2427,7 @@ describe("Lockers", async () => {
             let lockerSigner2 = lockers.connect(signer2)
 
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, mockTxId, 25000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 25000000);
 
             let coreBTCSigner2 = coreBTC.connect(signer2);
 
@@ -2433,14 +2467,13 @@ describe("Lockers", async () => {
         it("calculates health factor correctly when netMinted is zero", async function () {
             await lockers.setCCBurnRouter(mockCCBurnRouter.address);
             await mockCCBurnRouter.mock.ccBurn.returns(8000);
-            let mockTxId = "0x3bc193f1c3d40f1550ea31893da99120ab264cbc702208c21fc0065e8bc1d2a8";
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000000);
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, NATIVE_TOKEN);
             await lockers.addLocker(signer1Address);
             await lockers.addMinter(signer2Address);
             let lockerSigner2 = lockers.connect(signer2)
             await mockPriceOracle.mock.equivalentOutputAmount.returns(50000000);
-            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, mockTxId, 25000000);
+            await lockerSigner2.mint(LOCKER1_PUBKEY__HASH, signer2Address, TX_ID, 25000000);
             await lockers.setLiquidationRatio(0)
             await expect(
                 lockerSigner2.liquidateLocker(
@@ -2751,7 +2784,7 @@ describe("Lockers", async () => {
             expect(isCollateralUnused).to.equal(true);
         })
         it("Lockers utilize Collateral", async function () {
-            let lockersSigner1 =  lockers.connect(signer1)
+            let lockersSigner1 = lockers.connect(signer1)
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
             let isCollateralUnused0 = await lockers.isCollateralUnused(erc20Address)
             expect(isCollateralUnused0).to.equal(false);
@@ -2765,7 +2798,7 @@ describe("Lockers", async () => {
             expect(isCollateralUnused2).to.equal(true);
             let isCollateralUnused = await lockers.isCollateralUnused(NATIVE_TOKEN)
             expect(isCollateralUnused).to.equal(true);
-            
+
         })
     })
 
@@ -2796,7 +2829,7 @@ describe("Lockers", async () => {
 
         })
         it("Reverts when initialCandidates contains duplicate data", async function () {
-            
+
             await mockPriceOracle.mock.equivalentOutputAmount.returns(10000)
             await becomeLockerCandidate(signer1, minRequiredNativeTokenLockedAmount, erc20Address);
             await becomeLockerCandidate(signer2, minRequiredNativeTokenLockedAmount, erc20Address);
